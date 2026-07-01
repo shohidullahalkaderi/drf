@@ -1,0 +1,80 @@
+services:
+  app:
+    build: .
+    container_name: django_app_dev
+    restart: unless-stopped
+    volumes:
+      - .:/code
+    ports:
+      - "8000:8000" # Standard HTTP API Traffic (REST)
+    environment:
+      - DB_HOST=db
+      - DB_NAME=django_db
+      - DB_USER=django_user
+      - DB_PASSWORD=django_password
+      - DB_PORT=3306
+      - REDIS_HOST=redis
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: python manage.py runserver 0.0.0.0:8000
+
+  channels:
+    build: .
+    container_name: django_channels_dev
+    restart: unless-stopped
+    volumes:
+      - .:/code
+    ports:
+      - "8090:8000" # Dedicated Isolated WebSocket Port (Host 8090 -> Container 8000)
+    environment:
+      - DB_HOST=db
+      - DB_NAME=django_db
+      - DB_USER=django_user
+      - DB_PASSWORD=django_password
+      - DB_PORT=3306
+      - REDIS_HOST=redis
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Running your dedicated persistent WebSocket worker cleanly over Daphne
+    command: daphne -b 0.0.0.0 -p 8000 app.asgi:application
+
+  db:
+    image: mysql:8.0
+    container_name: django_mysql_db
+    restart: unless-stopped
+    environment:
+      - MYSQL_DATABASE=django_db
+      - MYSQL_USER=django_user
+      - MYSQL_PASSWORD=django_password
+      - MYSQL_ROOT_PASSWORD=root_password
+    ports:
+      - "3307:3306"
+    volumes:
+      - django_db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot_password"]
+      timeout: 5s
+      retries: 5
+      interval: 10s
+      start_period: 15s
+
+  redis:
+    image: redis:7-alpine
+    container_name: django_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  django_db_data:

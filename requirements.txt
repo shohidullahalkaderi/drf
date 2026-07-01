@@ -1,0 +1,8 @@
+Django==4.2.7
+channels==4.0.0
+channels-redis==4.2.0
+redis==5.0.1
+daphne==4.0.0     
+mysqlclient==2.2.0
+djangorestframework==3.14.0
+uvicorn[standard]==0.27.0
