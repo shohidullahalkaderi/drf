@@ -1,0 +1,26 @@
+# ==============================================================================
+# Django Core & Local Configurations
+# ==============================================================================
+*.log
+.pot
+*.pyc
+__pycache__/
+db.sqlite3
+db.sqlite3-journal
+media/
+staticfiles/
+
+# ==============================================================================
+# Development Tools & Environments
+# ==============================================================================
+.env
+.venv
+venv/
+ENV/
+htmlcov/
+.tox/
+.coverage
+.cache
+.pytest_cache/
+.vscode/
+.idea/

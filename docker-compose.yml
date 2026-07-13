@@ -1,0 +1,61 @@
+services:
+  app:
+    build: .
+    container_name: django_app_dev
+    restart: unless-stopped
+    volumes:
+      - .:/usr/src/app
+    ports:
+      - "8000:8000"
+    environment:
+      - DB_HOST=db
+      - DB_NAME=django_db
+      - DB_USER=django_user
+      - DB_PASSWORD=django_password
+      - DB_PORT=3306
+      - REDIS_HOST=redis
+      - REDIS_PASSWORD=secure_password
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  db:
+    image: mysql:8.0
+    container_name: django_mysql_db
+    restart: unless-stopped
+    environment:
+      - MYSQL_DATABASE=django_db
+      - MYSQL_USER=django_user
+      - MYSQL_PASSWORD=django_password
+      - MYSQL_ROOT_PASSWORD=root_password
+    ports:
+      - "3307:3306"
+    volumes:
+      - django_db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot_password"]
+      timeout: 5s
+      retries: 5
+      interval: 10s
+      start_period: 15s
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: django_redis
+    restart: unless-stopped
+    command: redis-server --requirepass secure_password
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "secure_password", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  django_db_data:
+  redis_data:
