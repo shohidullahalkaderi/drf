@@ -1,0 +1,14 @@
+# Core Framework & System dependencies
+asgiref==3.8.1
+sqlparse==0.5.3
+Django==5.2.16
+
+# Database & Engine drivers
+mysqlclient==2.2.4
+
+# API Engine & Helpers
+pytz==2024.1
+djangorestframework==3.15.2
+
+# Cache & Redis protocols
+redis==8.0.1

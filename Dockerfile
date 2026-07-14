@@ -10,12 +10,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Set the working directory
 WORKDIR /usr/src/app
 
-# Alternative approach: Installs requirements.txt if found, otherwise falls back to a blank string safely
-COPY requirements.txt* .
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt* 2>/dev/null || true
+# Upgrade pip first to ensure reliable dependency mapping
+RUN pip install --no-cache-dir --upgrade pip
 
-# NECESSARY CHANGE: Explicitly copy files into the new isolated WORKDIR layout
+# Copy blueprint requirements and lock file (both completely optional)
+COPY requirements.txt* requirements.lock* ./
+
+# Single-line guard: Prioritizes lock file, falls back to text file, or skips if neither exists
+RUN [ -f requirements.lock ] && pip install --no-cache-dir -r requirements.lock || \
+    { [ -f requirements.txt ] && pip install --no-cache-dir -r requirements.txt; } || \
+    echo "No python requirements files found, skipping installation."
+
+# Explicitly copy remaining codebase into WORKDIR
 COPY . .
 
 EXPOSE 8000
