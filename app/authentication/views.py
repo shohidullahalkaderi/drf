@@ -20,7 +20,8 @@ class CachedTokenAuthentication(authentication.BaseAuthentication):
             return None
 
         parts = auth_header.split()
-        if len(parts) != 2 or parts[0].lower() != 'token':
+        # CHANGED: Check for 'bearer' instead of 'token'
+        if len(parts) != 2 or parts[0].lower() != 'bearer':
             return None
 
         token = parts[1]
