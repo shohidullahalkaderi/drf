@@ -1,6 +1,10 @@
 from django.db import transaction, IntegrityError
+<<<<<<< HEAD
 from django.core.cache import cache
 from django.contrib.auth.models import User
+=======
+from django.contrib.auth import get_user_model
+>>>>>>> 55e1008 (updated password validation to prevent brute force and dictionary attack.)
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions, authentication, exceptions
@@ -13,6 +17,7 @@ from .serializers import (
     USER_CACHE_EXPIRY_SECONDS
 )
 
+<<<<<<< HEAD
 class CachedTokenAuthentication(authentication.BaseAuthentication):
     def authenticate(self, request):
         auth_header = request.META.get('HTTP_AUTHORIZATION')
@@ -48,6 +53,13 @@ class CachedTokenAuthentication(authentication.BaseAuthentication):
 
     def authenticate_header(self, request):
         return 'Token'
+=======
+User = get_user_model()
+
+# 1. Custom class defined inside the file
+class BearerTokenAuthentication(TokenAuthentication):
+    keyword = 'Bearer'
+>>>>>>> 55e1008 (updated password validation to prevent brute force and dictionary attack.)
 
 
 class RegisterView(APIView):
@@ -61,6 +73,10 @@ class RegisterView(APIView):
         try:
             with transaction.atomic():
                 user = serializer.save()
+<<<<<<< HEAD
+=======
+                token, _ = Token.objects.get_or_create(user=user)
+>>>>>>> 55e1008 (updated password validation to prevent brute force and dictionary attack.)
                 
             token = TokenManager.create_session(user.id)
             return Response({
@@ -84,7 +100,11 @@ class LoginView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
             
         user = serializer.validated_data['user']
+<<<<<<< HEAD
         token = serializer.validated_data['token']
+=======
+        token, _ = Token.objects.get_or_create(user=user)
+>>>>>>> 55e1008 (updated password validation to prevent brute force and dictionary attack.)
         
         return Response({
             "user": UserSerializer(user).data,
@@ -93,6 +113,7 @@ class LoginView(APIView):
 
 
 class LogoutView(APIView):
+<<<<<<< HEAD
     # Bind the view to use the authentication class defined right above it
     authentication_classes = [CachedTokenAuthentication]
     permission_classes = [permissions.IsAuthenticated]
@@ -100,4 +121,12 @@ class LogoutView(APIView):
     def post(self, request):
         TokenManager.destroy_session(request.auth)
         TokenManager.clear_cached_user(request.user.id)
+=======
+    # 2. Tell this view specifically to look for the "Bearer" token prefix
+    authentication_classes = [BearerTokenAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        request.auth.delete()
+>>>>>>> 55e1008 (updated password validation to prevent brute force and dictionary attack.)
         return Response({"detail": "Successfully logged out from active session."}, status=status.HTTP_200_OK)
