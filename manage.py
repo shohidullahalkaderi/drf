@@ -14,8 +14,8 @@ def wait_for_db() -> None:
     except ValueError:
         db_port = 3306
 
-    # Only run the wait check if starting the server or handling migrations
-    target_commands = {'runserver', 'migrate', 'makemigrations', 'inspectdb'}
+    # Included 'seed_db' and 'test' so database is verified ready
+    target_commands = {'runserver', 'migrate', 'makemigrations', 'inspectdb', 'seed', 'test'}
     if len(sys.argv) > 1 and sys.argv[1] in target_commands:
         print(f"Checking network availability on {db_host}:{db_port}...", flush=True)
         
@@ -34,11 +34,19 @@ def wait_for_db() -> None:
 
 def main() -> None:
     """Run administrative tasks."""
-    # Django 5 structure defaults to 'app.settings' or your explicit project folder name
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'app.settings')
     
+    # Custom shortcut: Default 'test' to 'app.authentication' if no specific module is passed
+    if len(sys.argv) == 2 and sys.argv[1] == 'test':
+        sys.argv.append('app.authentication')
+
     # Block execution until the network socket dependency answers
     wait_for_db()
+
+    # Custom shortcut: Execute manual seed file when 'seed_db' is called
+    if len(sys.argv) > 1 and sys.argv[1] == 'seed':
+        import app.authentication.seed
+        sys.exit(0)
 
     try:
         from django.core.management import execute_from_command_line

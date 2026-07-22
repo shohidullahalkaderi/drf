@@ -18,6 +18,6 @@ docker compose exec db mysqladmin -u django_user -p'django_password' ping
 # Grant privileges to the Django user
 docker compose exec -T db mysql -u root -proot_password -e "GRANT ALL PRIVILEGES ON \`test_%\`.* TO 'django_user'@'%'; FLUSH PRIVILEGES;"
 
-# Seed the database with initial data
-docker compose exec app python manage.py seed_db
-docker compose exec app python manage.py test app.authentication
+# Seed the database and run test
+docker compose exec app python manage.py seed
+docker compose exec app python manage.py test
