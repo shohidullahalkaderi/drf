@@ -1,46 +1,11 @@
-<<<<<<< HEAD
-import secrets
-from django.core.cache import cache
-from django.contrib.auth import authenticate
-from django.contrib.auth.models import User
-=======
 import re
 from django.contrib.auth import authenticate, get_user_model
->>>>>>> 55e1008 (updated password validation to prevent brute force and dictionary attack.)
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
-<<<<<<< HEAD
-TOKEN_EXPIRY_SECONDS = 86400  # 24 Hours
-USER_CACHE_EXPIRY_SECONDS = 3600  # 1 Hour
-
-class TokenManager:
-    @staticmethod
-    def generate_token() -> str:
-        return secrets.token_hex(20)
-
-    @staticmethod
-    def create_session(user_id: int) -> str:
-        token = TokenManager.generate_token()
-        cache.set(f"auth_token_{token}", user_id, TOKEN_EXPIRY_SECONDS)
-        return token
-
-    @staticmethod
-    def get_user_id(token: str) -> int:
-        return cache.get(f"auth_token_{token}")
-
-    @staticmethod
-    def destroy_session(token: str) -> None:
-        cache.delete(f"auth_token_{token}")
-        
-    @staticmethod
-    def clear_cached_user(user_id: int) -> None:
-        cache.delete(f"user_profile_{user_id}")
-
-=======
 User = get_user_model()
->>>>>>> 55e1008 (updated password validation to prevent brute force and dictionary attack.)
+
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
@@ -61,8 +26,18 @@ class RegisterSerializer(serializers.ModelSerializer):
         style={'input_type': 'password'}
     )
     email = serializers.EmailField(required=True)
-    first_name = serializers.CharField(max_length=50, required=False, allow_blank=True, default='')
-    last_name = serializers.CharField(max_length=50, required=False, allow_blank=True, default='')
+    first_name = serializers.CharField(
+        max_length=50, 
+        required=False, 
+        allow_blank=True, 
+        default=''
+    )
+    last_name = serializers.CharField(
+        max_length=50, 
+        required=False, 
+        allow_blank=True, 
+        default=''
+    )
 
     class Meta:
         model = User
@@ -100,7 +75,7 @@ class RegisterSerializer(serializers.ModelSerializer):
                 "Password must contain at least one special character (@, $, !, %, *, #, ?, &, .)."
             )
 
-        # 2. Run core Django dictionary validation rules safely inside DRF framework boundaries
+        # 2. Core Django password validators
         try:
             validate_password(value)
         except DjangoValidationError as e:
@@ -119,27 +94,43 @@ class RegisterSerializer(serializers.ModelSerializer):
 
 
 class LoginSerializer(serializers.Serializer):
-    username = serializers.CharField(required=True)
-    password = serializers.CharField(required=True, write_only=True, style={'input_type': 'password'})
+    email = serializers.EmailField(required=True)
+    password = serializers.CharField(
+        required=True, 
+        write_only=True, 
+        style={'input_type': 'password'}
+    )
 
     def validate(self, attrs):
-        username = attrs.get('username')
+        # Normalize email input to lowercase to align with RegisterSerializer
+        email = attrs.get('email', '').strip().lower()
         password = attrs.get('password')
 
-        user = authenticate(username=username, password=password)
-        
+        # Retrieve username corresponding to the provided email address
+        try:
+            user_obj = User.objects.get(email__iexact=email)
+            username = user_obj.get_username()
+        except User.DoesNotExist:
+            username = None
+
+        # Authenticate against Django's authentication system
+        user = authenticate(
+            request=self.context.get('request'),
+            username=username,
+            password=password
+        )
+
         if not user:
-            raise serializers.ValidationError({"detail": "Invalid credentials provided."}, code='authorization')
-            
+            raise serializers.ValidationError(
+                {"detail": "Invalid credentials provided."}, 
+                code='authorization'
+            )
+
         if not user.is_active:
-            raise serializers.ValidationError({"detail": "Account disabled."}, code='authorization')
+            raise serializers.ValidationError(
+                {"detail": "Account disabled."}, 
+                code='authorization'
+            )
 
-<<<<<<< HEAD
-        # Caching/Token logic triggered here
-        token = TokenManager.create_session(user.id)
-
-=======
->>>>>>> 55e1008 (updated password validation to prevent brute force and dictionary attack.)
         attrs['user'] = user
-        attrs['token'] = token
         return attrs
