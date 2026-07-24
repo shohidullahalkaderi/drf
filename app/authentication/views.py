@@ -1,8 +1,8 @@
-from django.db import transaction, IntegrityError
+from django.db import transaction
 from django.contrib.auth import get_user_model
+from rest_framework import status, permissions, exceptions
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status, permissions
 from rest_framework.authentication import TokenAuthentication
 from rest_framework.authtoken.models import Token 
 
@@ -14,9 +14,15 @@ from .serializers import (
 
 User = get_user_model()
 
-# Custom class defined inside the file
+
 class BearerTokenAuthentication(TokenAuthentication):
     keyword = 'Bearer'
+
+    def authenticate_credentials(self, key):
+        try:
+            return super().authenticate_credentials(key)
+        except exceptions.AuthenticationFailed:
+            raise exceptions.AuthenticationFailed({"detail": "Invalid auth token provided."})
 
 
 class RegisterView(APIView):
@@ -24,33 +30,24 @@ class RegisterView(APIView):
 
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        serializer.is_valid(raise_exception=True)
             
-        try:
-            with transaction.atomic():
-                user = serializer.save()
-                token, _ = Token.objects.get_or_create(user=user)
-                
-            return Response({
-                "user": UserSerializer(user).data,
-                "token": token.key
-            }, status=status.HTTP_201_CREATED)
+        with transaction.atomic():
+            user = serializer.save()
+            token, _ = Token.objects.get_or_create(user=user)
             
-        except IntegrityError:
-            return Response(
-                {"detail": "Database error during registration. Username or Email might have just been taken."}, 
-                status=status.HTTP_409_CONFLICT
-            )
+        return Response({
+            "user": UserSerializer(user).data,
+            "token": token.key
+        }, status=status.HTTP_201_CREATED)
 
 
 class LoginView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
-        serializer = LoginSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        serializer = LoginSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
             
         user = serializer.validated_data['user']
         token, _ = Token.objects.get_or_create(user=user)
@@ -62,10 +59,12 @@ class LoginView(APIView):
 
 
 class LogoutView(APIView):
-    # 2. Tell this view specifically to look for the "Bearer" token prefix
     authentication_classes = [BearerTokenAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
         request.auth.delete()
-        return Response({"detail": "Successfully logged out from active session."}, status=status.HTTP_200_OK)
+        return Response(
+            {"detail": "Successfully logged out."}, 
+            status=status.HTTP_200_OK
+        )

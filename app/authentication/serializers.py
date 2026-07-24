@@ -1,10 +1,28 @@
 import re
-from django.contrib.auth import authenticate, get_user_model
+import uuid
+from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
-from rest_framework import serializers
+from rest_framework import serializers, status
+from rest_framework.exceptions import APIException, PermissionDenied
 
 User = get_user_model()
+
+
+class CustomBadRequest(APIException):
+    """Custom exception to force a flat dictionary response with HTTP 400."""
+    status_code = status.HTTP_400_BAD_REQUEST
+
+    def __init__(self, detail):
+        self.detail = detail
+
+
+class CustomUnauthorized(APIException):
+    """Custom exception to force a flat dictionary response with HTTP 401."""
+    status_code = status.HTTP_401_UNAUTHORIZED
+
+    def __init__(self, detail):
+        self.detail = detail
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -14,123 +32,146 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 class RegisterSerializer(serializers.ModelSerializer):
-    # Enforce standard constraints matching your architectural requirements
-    username = serializers.CharField(
-        min_length=3,
-        max_length=50,
-        required=True
-    )
+    email = serializers.EmailField(required=True)
     password = serializers.CharField(
         write_only=True, 
         required=True, 
         style={'input_type': 'password'}
     )
-    email = serializers.EmailField(required=True)
+    password_confirmation = serializers.CharField(
+        write_only=True, 
+        required=True, 
+        style={'input_type': 'password'}
+    )
+
+    username = serializers.CharField(
+        min_length=3, 
+        max_length=50, 
+        required=False, 
+        allow_blank=True, 
+        allow_null=True,
+        default=''
+    )
     first_name = serializers.CharField(
         max_length=50, 
         required=False, 
         allow_blank=True, 
+        allow_null=True,
         default=''
     )
     last_name = serializers.CharField(
         max_length=50, 
         required=False, 
         allow_blank=True, 
+        allow_null=True,
         default=''
     )
 
     class Meta:
         model = User
-        fields = ('username', 'email', 'password', 'first_name', 'last_name')
+        fields = ('username', 'email', 'password', 'password_confirmation', 'first_name', 'last_name')
 
-    def validate_username(self, value):
-        # Laravel alpha_dash equivalent: alphanumeric characters, dashes, and underscores
-        if not re.match(r'^[a-zA-Z0-9_-]+$', value):
-            raise serializers.ValidationError(
-                "The username may only contain letters, numbers, dashes, and underscores."
-            )
+    def validate(self, attrs):
+        db_error = {"detail": "Invalid registration credentials provided."}
         
-        if User.objects.filter(username__iexact=value).exists():
-            raise serializers.ValidationError("A user with this username already exists.")
-            
-        return value
+        email = (attrs.get('email') or '').strip().lower()
+        password = attrs.get('password') or ''
+        password_confirmation = attrs.get('password_confirmation') or ''
+        username = (attrs.get('username') or '').strip()
 
-    def validate_email(self, value):
-        if User.objects.filter(email__iexact=value).exists():
-            raise serializers.ValidationError("A user with this email address already exists.")
-        return value.lower()
+        # 1. Compare password with password_confirmation
+        if not password or not password_confirmation or password != password_confirmation:
+            raise CustomBadRequest(db_error)
 
-    def validate_password(self, value):
-        # 1. Complexity constraints checklist
-        if len(value) < 8:
-            raise serializers.ValidationError("Password must be at least 8 characters long.")
-        if not re.search(r'[A-Z]', value):
-            raise serializers.ValidationError("Password must contain at least one capital letter.")
-        if not re.search(r'[a-z]', value):
-            raise serializers.ValidationError("Password must contain at least one small letter.")
-        if not re.search(r'[0-9]', value):
-            raise serializers.ValidationError("Password must contain at least one number.")
-        if not re.search(r'[@$!%*#?&.]', value):
-            raise serializers.ValidationError(
-                "Password must contain at least one special character (@, $, !, %, *, #, ?, &, .)."
-            )
+        # 2. Validate Email Presence & Uniqueness
+        if not email or User.objects.filter(email__iexact=email).exists():
+            raise CustomBadRequest(db_error)
+        attrs['email'] = email
 
-        # 2. Core Django password validators
+        # 3. Validate Username (if provided)
+        if username:
+            if not re.match(r'^[a-zA-Z0-9_-]+$', username) or User.objects.filter(username__iexact=username).exists():
+                raise CustomBadRequest(db_error)
+
+        # 4. Validate Password Complexity
+        if len(password) < 8 or \
+           not re.search(r'[A-Z]', password) or \
+           not re.search(r'[a-z]', password) or \
+           not re.search(r'[0-9]', password) or \
+           not re.search(r'[@$!%*#?&.]', password):
+            raise CustomBadRequest(db_error)
+
         try:
-            validate_password(value)
-        except DjangoValidationError as e:
-            raise serializers.ValidationError(list(e.messages))
+            validate_password(password)
+        except DjangoValidationError:
+            raise CustomBadRequest(db_error)
 
-        return value
+        return attrs
 
     def create(self, validated_data):
+        validated_data.pop('password_confirmation', None)
+        
+        email = validated_data['email']
+        username = (validated_data.get('username') or '').strip()
+
+        if not username:
+            base_name = re.sub(r'[^a-zA-Z0-9_-]', '', email.split('@')[0])[:30] or 'user'
+            username = f"{base_name}_{uuid.uuid4().hex[:8]}"
+
         return User.objects.create_user(
-            username=validated_data['username'],
-            email=validated_data['email'],
+            username=username,
+            email=email,
             password=validated_data['password'],
-            first_name=validated_data.get('first_name', ''),
-            last_name=validated_data.get('last_name', '')
+            first_name=validated_data.get('first_name') or '',
+            last_name=validated_data.get('last_name') or ''
         )
 
 
 class LoginSerializer(serializers.Serializer):
-    email = serializers.EmailField(required=True)
+    email = serializers.EmailField(
+        required=False, 
+        allow_blank=True, 
+        allow_null=True,
+        default=''
+    )
     password = serializers.CharField(
-        required=True, 
+        required=False, 
         write_only=True, 
+        allow_blank=True,
+        allow_null=True,
+        default='',
         style={'input_type': 'password'}
     )
 
     def validate(self, attrs):
-        # Normalize email input to lowercase to align with RegisterSerializer
-        email = attrs.get('email', '').strip().lower()
-        password = attrs.get('password')
+        from django.contrib.auth import authenticate
 
-        # Retrieve username corresponding to the provided email address
+        email = (attrs.get('email') or '').strip().lower()
+        password = attrs.get('password') or ''
+
+        # 1. Missing, null, or blank email/password -> HTTP 400 Bad Request
+        if not email or not password:
+            raise CustomBadRequest({"detail": "Invalid login credentials provided."})
+
         try:
             user_obj = User.objects.get(email__iexact=email)
             username = user_obj.get_username()
         except User.DoesNotExist:
             username = None
 
-        # Authenticate against Django's authentication system
         user = authenticate(
-            request=self.context.get('request'),
-            username=username,
+            request=self.context.get('request'), 
+            username=username, 
             password=password
         )
 
+        # 2. Wrong email or password -> HTTP 401 Unauthorized
         if not user:
-            raise serializers.ValidationError(
-                {"detail": "Invalid credentials provided."}, 
-                code='authorization'
-            )
+            raise CustomUnauthorized({"detail": "Invalid login credentials provided."})
 
+        # 3. Disabled account -> HTTP 403 Forbidden
         if not user.is_active:
-            raise serializers.ValidationError(
-                {"detail": "Account disabled."}, 
-                code='authorization'
-            )
+            raise PermissionDenied({"detail": "Account disabled."})
 
         attrs['user'] = user
         return attrs
