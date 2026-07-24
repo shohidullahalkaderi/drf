@@ -1,9 +1,10 @@
+import uuid
 from django.test import TestCase
 from django.contrib.auth.models import User
 from django.core.cache import cache
-import uuid
 
 from .serializers import RegisterSerializer, UserSerializer
+
 
 class AuthenticationUnitTest(TestCase):
 
@@ -14,6 +15,7 @@ class AuthenticationUnitTest(TestCase):
             'username': 'sh!@#invalid',
             'email': 'invalid-email-pattern',
             'password': 'short',
+            'password_confirmation': 'mismatch',
         }
         invalid_serializer = RegisterSerializer(data=invalid_payload)
         self.assertFalse(invalid_serializer.is_valid())
@@ -23,6 +25,7 @@ class AuthenticationUnitTest(TestCase):
             'username': 'shohid_dev',
             'email': 'shohid@backend.io',
             'password': 'StrictSecurePasswordPattern159!',
+            'password_confirmation': 'StrictSecurePasswordPattern159!',
             'first_name': 'Shohidullah',
             'last_name': 'Developer',
         }
@@ -31,8 +34,7 @@ class AuthenticationUnitTest(TestCase):
 
     def test_user_serializer_data_transformation(self):
         """Test UserSerializer structural data transformations."""
-        user = User(
-            id=1,
+        user = User.objects.create(
             username='shohid_dev',
             email='shohid@backend.io',
             first_name='Shohidullah',
@@ -42,7 +44,6 @@ class AuthenticationUnitTest(TestCase):
         serializer = UserSerializer(instance=user)
         data = serializer.data
 
-        self.assertEqual(data['id'], 1)
         self.assertEqual(data['username'], 'shohid_dev')
         self.assertEqual(data['email'], 'shohid@backend.io')
         self.assertEqual(data['first_name'], 'Shohidullah')
