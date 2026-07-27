@@ -102,6 +102,14 @@ CACHES = {
     }
 }
 
+REST_FRAMEWORK = {
+    'DEFAULT_THROTTLE_RATES': {
+        'login': '5/minute',
+        'register': '10/minute',
+        'logout': '10/minute',
+    },
+}
+
 
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators

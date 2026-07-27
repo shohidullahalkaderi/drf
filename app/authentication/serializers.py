@@ -25,6 +25,14 @@ class CustomUnauthorized(APIException):
         self.detail = detail
 
 
+class CustomThrottled(APIException):
+    """Custom exception to force a flat dictionary response with HTTP 429."""
+    status_code = status.HTTP_429_TOO_MANY_REQUESTS
+
+    def __init__(self, detail):
+        self.detail = detail
+
+
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
@@ -32,15 +40,26 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 class RegisterSerializer(serializers.ModelSerializer):
-    email = serializers.EmailField(required=True)
+    email = serializers.EmailField(
+        required=False, 
+        allow_blank=True, 
+        allow_null=True,
+        default=''
+    )
     password = serializers.CharField(
+        required=False, 
         write_only=True, 
-        required=True, 
+        allow_blank=True,
+        allow_null=True,
+        default='',
         style={'input_type': 'password'}
     )
     password_confirmation = serializers.CharField(
+        required=False, 
         write_only=True, 
-        required=True, 
+        allow_blank=True,
+        allow_null=True,
+        default='',
         style={'input_type': 'password'}
     )
 
