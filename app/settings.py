@@ -84,6 +84,10 @@ DATABASES = {
         'PASSWORD': os.environ.get('DB_PASSWORD', 'django_password'),
         'HOST': os.environ.get('DB_HOST', 'db'),  # Matches the docker-compose service name
         'PORT': os.environ.get('DB_PORT', '3306'),
+        'TEST': {
+            # Tells Django to use a dedicated test database name so it doesn't touch your dev data
+            'NAME': 'test_' + os.environ.get('DB_NAME', 'django_db'),
+        },
     }
 }
 
