@@ -1,0 +1,230 @@
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    io.kompose.service: app
+  name: app
+spec:
+  type: ClusterIP
+  ports:
+    - name: "http"
+      port: 8000
+      targetPort: 8000
+  selector:
+    io.kompose.service: app
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    io.kompose.service: db
+  name: db
+spec:
+  type: ClusterIP
+  ports:
+    - name: "mysql"
+      port: 3306
+      targetPort: 3306
+  selector:
+    io.kompose.service: db
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    io.kompose.service: redis
+  name: redis
+spec:
+  type: ClusterIP
+  ports:
+    - name: "redis"
+      port: 6379
+      targetPort: 6379
+  selector:
+    io.kompose.service: redis
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    io.kompose.service: app
+  name: app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: app
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        io.kompose.service: app
+    spec:
+      containers:
+        - env:
+            - name: DB_HOST
+              value: db
+            - name: DB_NAME
+              value: django_db
+            - name: DB_PASSWORD
+              value: django_password
+            - name: DB_PORT
+              value: "3306"
+            - name: DB_USER
+              value: django_user
+            - name: REDIS_HOST
+              value: redis
+            - name: REDIS_PASSWORD
+              value: secure_password
+            - name: REDIS_PORT
+              value: "6379"
+          image: django-app:dev
+          imagePullPolicy: Never
+          name: django-app
+          ports:
+            - containerPort: 8000
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      restartPolicy: Always
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    io.kompose.service: db
+  name: db
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: db
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        io.kompose.service: db
+    spec:
+      containers:
+        - name: django-mysql-db
+          image: mysql:8.0
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              value: "root_password"
+            - name: MYSQL_DATABASE
+              value: "django_db"
+            - name: MYSQL_USER
+              value: "django_user"
+            - name: MYSQL_PASSWORD
+              value: "django_password"
+            - name: MYSQL_ROOT_HOST
+              value: "%"
+          ports:
+            - containerPort: 3306
+              protocol: TCP
+          livenessProbe:
+            exec:
+              command:
+                - mysqladmin
+                - ping
+                - -h
+                - 127.0.0.1
+                - -uroot
+                - -proot_password
+            failureThreshold: 5
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+          volumeMounts:
+            - mountPath: /var/lib/mysql
+              name: django-db-data
+      restartPolicy: Always
+      volumes:
+        - name: django-db-data
+          persistentVolumeClaim:
+            claimName: django-db-data
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  labels:
+    io.kompose.service: django-db-data
+  name: django-db-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Mi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    io.kompose.service: redis
+  name: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: redis
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        io.kompose.service: redis
+    spec:
+      containers:
+        - args:
+            - redis-server
+            - --requirepass
+            - secure_password
+          image: redis:7.2-alpine
+          livenessProbe:
+            exec:
+              command:
+                - redis-cli
+                - -a
+                - secure_password
+                - ping
+            failureThreshold: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          name: django-redis
+          ports:
+            - containerPort: 6379
+              protocol: TCP
+          volumeMounts:
+            - mountPath: /data
+              name: redis-data
+      restartPolicy: Always
+      volumes:
+        - name: redis-data
+          persistentVolumeClaim:
+            claimName: redis-data
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  labels:
+    io.kompose.service: redis-data
+  name: redis-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Mi

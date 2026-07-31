@@ -24,6 +24,7 @@ RUN [ -f requirements.lock ] && pip install --no-cache-dir -r requirements.lock 
 # Explicitly copy remaining codebase into WORKDIR
 COPY . .
 
+# Expose HTTP port 
 EXPOSE 8000
 
 CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]

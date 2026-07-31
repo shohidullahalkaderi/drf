@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 import os
+import sys
 from pathlib import Path
 from django.core.exceptions import ImproperlyConfigured
 
@@ -27,7 +28,8 @@ SECRET_KEY = 'django-insecure-thy^kqi^5f*lpv9)#6+ogi@b27egi4f(q3m-x=@qikk^2%!guj
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+# ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = ['172.20.142.95', 'localhost', '127.0.0.1']
 
 # Application definition
 
@@ -84,12 +86,14 @@ DATABASES = {
         'PASSWORD': os.environ.get('DB_PASSWORD', 'django_password'),
         'HOST': os.environ.get('DB_HOST', 'db'),  # Matches the docker-compose service name
         'PORT': os.environ.get('DB_PORT', '3306'),
-        'TEST': {
-            # Tells Django to use a dedicated test database name so it doesn't touch your dev data
-            'NAME': 'test_' + os.environ.get('DB_NAME', 'django_db'),
-        },
     }
 }
+
+if 'test' in sys.argv:
+    DATABASES['default'] = {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': ':memory:',
+    }
 
 # REDIS CONFIGURATION (Hardcoded)
 REDIS_HOST = 'redis'
