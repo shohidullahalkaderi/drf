@@ -3,8 +3,8 @@
 # 1. Kill stale background port-forwards
 pkill -f "kubectl port-forward" || true
 # docker image prune -a -f
-docker system prune -a --volumes -f
-kubectl delete namespace django-stack
+# docker system prune -a --volumes -f
+# kubectl delete namespace django-stack
 
 # 2. Check if the Kind cluster exists; create it if missing
 CLUSTER_NAME="kind"
@@ -47,7 +47,7 @@ kubectl port-forward --address 0.0.0.0 svc/redis 6380:6379 -n django-stack &
 # 10. Running Django migrations, seed, and tests
 kubectl exec deployment/app -n django-stack -- python manage.py migrate
 kubectl exec deployment/app -n django-stack -- python manage.py seed
-kubectl exec deployment/app -n django-stack -- python manage.py test
+kubectl exec deployment/app -n django-stack -- python manage.py test --settings=app.settings_test
 
 # 11. test via terminal
 curl -I http://localhost:8080

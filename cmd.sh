@@ -11,13 +11,6 @@ docker compose up -d
 docker compose exec app python manage.py migrate
 docker compose exec app ls -la /usr/src/app
 
-# Verify engine health via Compose services using safe single-quoted credentials
-docker compose exec redis redis-cli -a 'secure_password' PING
-docker compose exec db mysqladmin -u django_user -p'django_password' ping
-
-# Grant privileges to the Django user
-docker compose exec -T db mysql -u root -proot_password -e "GRANT ALL PRIVILEGES ON \`test_%\`.* TO 'django_user'@'%'; FLUSH PRIVILEGES;"
-
 # Seed the database and run test
 docker compose exec app python manage.py seed
-docker compose exec app python manage.py test
+docker compose exec app python manage.py test --settings=app.settings_test

@@ -30,6 +30,7 @@ services:
       - MYSQL_USER=django_user
       - MYSQL_PASSWORD=django_password
       - MYSQL_ROOT_PASSWORD=root_password
+      - MYSQL_ROOT_HOST=%
     ports:
       - "3307:3306"
     volumes:
