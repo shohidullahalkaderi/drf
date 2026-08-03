@@ -4,7 +4,7 @@
 pkill -f "kubectl port-forward" || true
 # docker image prune -a -f
 # docker system prune -a --volumes -f
-# kubectl delete namespace django-stack
+kubectl delete namespace django-stack
 
 # 2. Check if the Kind cluster exists; create it if missing
 CLUSTER_NAME="kind"
@@ -49,8 +49,16 @@ kubectl exec deployment/app -n django-stack -- python manage.py migrate
 kubectl exec deployment/app -n django-stack -- python manage.py seed
 kubectl exec deployment/app -n django-stack -- python manage.py test --settings=app.settings_test
 
-# 11. test via terminal
+# 11. Display current pod statuses
+kubectl get pods -n django-stack
+
+# 12. test via terminal
 curl -I http://localhost:8080
+
+# 13. Trivy Privilege Escalation scan on the current directory
+trivy config --quiet --include-non-failures Dockerfile | grep -E "(DS-0002|DS-0006|DS-0027)"
+trivy config --quiet --include-non-failures k8s.yaml | grep -E "(KSV-0001|KSV-0003|KSV-0005|KSV-0012)"
 '
+
 # 12. Display current pod statuses
 kubectl get pods -n django-stack

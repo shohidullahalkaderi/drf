@@ -1,30 +1,58 @@
-FROM python:3.11-slim
+# Stage : Builder
+FROM python:3.11-slim AS builder
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    default-libmysqlclient-dev \
-    pkg-config \
-    && rm -rf /var/lib/apt/lists/*
-
-# Set the working directory
 WORKDIR /usr/src/app
 
-# Upgrade pip first to ensure reliable dependency mapping
+# Install build dependencies & header libraries
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc \
+        default-libmysqlclient-dev \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir --upgrade pip
 
-# Copy blueprint requirements and lock file (both completely optional)
+# Copy dependency manifests
 COPY requirements.txt* requirements.lock* ./
 
-# Single-line guard: Prioritizes lock file, falls back to text file, or skips if neither exists
-RUN [ -f requirements.lock ] && pip install --no-cache-dir -r requirements.lock || \
-    { [ -f requirements.txt ] && pip install --no-cache-dir -r requirements.txt; } || \
-    echo "No python requirements files found, skipping installation."
+# Compile wheel packages into isolated wheelhouse
+RUN mkdir /wheels && \
+    if [ -f requirements.lock ]; then \
+        pip wheel --no-cache-dir --wheel-dir=/wheels -r requirements.lock; \
+    elif [ -f requirements.txt ]; then \
+        pip wheel --no-cache-dir --wheel-dir=/wheels -r requirements.txt; \
+    fi
 
-# Explicitly copy remaining codebase into WORKDIR
-COPY . .
+# Stage : Production Runtime
+FROM python:3.11-slim AS runner
 
-# Expose HTTP port 
+WORKDIR /usr/src/app
+
+# Install runtime dependencies including netcat-openbsd for nc healthcheck
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        default-libmysqlclient-dev \
+        netcat-openbsd \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy pre-compiled wheels from builder stage
+COPY --from=builder /wheels /wheels
+RUN pip install --no-cache-dir /wheels/* && rm -rf /wheels
+
+# Create dedicated non-root user and group
+RUN addgroup --system appgroup && adduser --system --group appuser
+
+# Copy codebase with correct ownership
+COPY --chown=appuser:appgroup . .
+
+# Switch to non-root execution
+USER appuser
+
 EXPOSE 8000
 
-CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+# Universal container healthcheck using netcat
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD nc -z 0 8000 || exit 1
+
+# Production server entrypoint
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "app.wsgi:application"]
