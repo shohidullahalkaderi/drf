@@ -8,13 +8,15 @@ Django==5.2.16
 mysqlclient==2.2.4
 
 # API Engine & Helpers
-pytz==2024.2
 djangorestframework==3.15.2
 
 # Cache, Redis & Async Protocols
-async-timeout==4.0.3
 redis==8.0.1
 
-# Production WSGI Server & Process Management
-packaging==24.1
-gunicorn==22.0.0
+# Production ASGI Server & Async Extensions
+h11==0.14.0
+httptools==0.6.4
+uvloop==0.21.0
+watchfiles==1.0.4
+websockets==14.1
+uvicorn==0.34.0

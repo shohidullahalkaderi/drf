@@ -3,7 +3,7 @@ services:
     build: .
     container_name: django_app_dev
     restart: unless-stopped
-    volumes: 
+    volumes:
       - .:/usr/src/app
     ports:
       - "8000:8000"
