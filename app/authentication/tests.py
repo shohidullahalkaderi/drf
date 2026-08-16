@@ -5,6 +5,9 @@ from django.core.cache import cache
 
 from .serializers import RegisterSerializer, UserSerializer
 
+from chat.models import Message
+from chat.serializers import MessageSerializer
+
 
 class AuthenticationUnitTest(TestCase):
 
@@ -64,3 +67,39 @@ class AuthenticationUnitTest(TestCase):
         # 3. Evict key and assert cleanup phase passed
         cache.delete(test_key)
         self.assertIsNone(cache.get(test_key))
+
+    def test_message_serializer_and_model_constraints(self):
+        """Test validation constraints and structural serialization for the Message model."""
+        # 1. Assert missing or invalid fields fail serializer validation
+        invalid_payload = {
+            'sender_id': '',
+            'message': '',
+        }
+        invalid_serializer = MessageSerializer(data=invalid_payload)
+        self.assertFalse(invalid_serializer.is_valid())
+        self.assertIn('sender_id', invalid_serializer.errors)
+        self.assertIn('auth_id', invalid_serializer.errors)
+        self.assertIn('message', invalid_serializer.errors)
+
+        # 2. Assert valid payload successfully passes serializer validation and database persistence
+        valid_payload = {
+            'sender_id': 101,
+            'auth_id': 101,
+            'message': 'Hello from the automated test suite!',
+        }
+        valid_serializer = MessageSerializer(data=valid_payload)
+        self.assertTrue(valid_serializer.is_valid())
+
+        # Save instance to database
+        message_instance = valid_serializer.save()
+        self.assertIsNotNone(message_instance.id)
+
+        # 3. Test serializer representation output
+        serializer = MessageSerializer(instance=message_instance)
+        data = serializer.data
+
+        self.assertEqual(data['sender_id'], 101)
+        self.assertEqual(data['auth_id'], 101)
+        self.assertEqual(data['message'], 'Hello from the automated test suite!')
+        self.assertIn('id', data)
+        self.assertIn('created_at', data)

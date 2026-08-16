@@ -1,6 +1,8 @@
-import os, sys, django
+import os
+import sys
+import django
 
-# project root (where manage.py lives)
+# project root (where manage.py lives, two levels up from app/authentication/)
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, '../../'))
 
@@ -12,8 +14,14 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'app.settings')
 django.setup()
 
 from django.contrib.auth import get_user_model
+
+# Import models and serializers from the chat app
+from chat.models import Message
+from chat.serializers import MessageSerializer
+
 User = get_user_model()
 
+# 1. Seed User Profiles
 profiles = [
     {
         'username': 'backend_admin',
@@ -37,4 +45,26 @@ for profile in profiles:
     user.set_password(raw_password)
     user.save()
 
-print(f"Database seeding completed successfully!")
+# 2. Optional: Example of utilizing chat models/serializers during seeding if needed
+# (e.g., seeding an initial chat message tied to the admin user)
+# 2. Seed Initial Messages
+admin_user = User.objects.filter(username='backend_admin').first()
+
+if admin_user:
+    messages = [
+        {
+            'sender_id': admin_user.id,
+            'auth_id': admin_user.id,
+            'message': 'System initialized successfully via seed script.',
+        }
+    ]
+
+    for message_data in messages:
+        # Use update_or_create or get_or_create to prevent duplication on re-runs
+        Message.objects.update_or_create(
+            sender_id=message_data['sender_id'],
+            message=message_data['message'],
+            defaults={'auth_id': message_data['auth_id']}
+        )
+
+print("Database seeding completed successfully!")

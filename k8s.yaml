@@ -5,11 +5,6 @@ metadata:
   labels:
     app.kubernetes.io/name: django-app
 type: Opaque
-# NOTE: Plaintext credentials in stringData are only base64-encoded at rest,
-# not encrypted. Fine for local kind/Docker Desktop, but before a real
-# production apply these should come from `kubectl create secret` off an
-# untracked env file, or a secrets manager (Sealed Secrets / External
-# Secrets Operator / SOPS) instead of being committed here.
 stringData:
   DB_PASSWORD: "django_password"
   MYSQL_ROOT_PASSWORD: "root_password"
@@ -82,7 +77,6 @@ spec:
       labels:
         io.kompose.service: app
     spec:
-      # Matches numeric UID/GID 10001 defined in the Dockerfile
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -91,14 +85,6 @@ spec:
       containers:
         - name: django-app
           image: django-app:dev
-          # MODIFIED: Always -> IfNotPresent. Reverted for local kind/Docker
-          # Desktop dev: this image is built locally and never pushed to a
-          # registry, so imagePullPolicy: Always caused ErrImagePull/
-          # ImagePullBackOff (kubelet tried to pull "django-app:dev" from
-          # Docker Hub, which doesn't have it). IfNotPresent is correct here
-          # since the cluster uses the image already loaded into its local
-          # store. Switch to Always + an immutable tag (e.g. git SHA) pushed
-          # to a real registry once this moves to an actual prod cluster.
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -150,12 +136,21 @@ spec:
               port: 8000
             initialDelaySeconds: 5
             periodSeconds: 5
+            failureThreshold: 3
           livenessProbe:
             tcpSocket:
               port: 8000
-            initialDelaySeconds: 15
-            periodSeconds: 10
-      restartPolicy: Always
+            # [30-second SSE streaming setup]: Set to 35s. Since streams recycle every 30 seconds, 
+            # we give it a tiny buffer past 30s before the liveness check starts.
+            initialDelaySeconds: 35
+            # [30-second SSE streaming setup]: 15-second intervals give worker threads enough breathing room 
+            # during heavy concurrent stream requests.
+            periodSeconds: 15
+            timeoutSeconds: 5
+            # [30-second SSE streaming setup]: A threshold of 4 means Kubelet waits 4 consecutive failures 
+            # (15s * 4 = 60 seconds of unresponsiveness) before killing the pod.
+            failureThreshold: 4
+          restartPolicy: Always
 
 ---
 apiVersion: apps/v1
@@ -176,8 +171,6 @@ spec:
       labels:
         io.kompose.service: db
     spec:
-      # Re-added runAsNonRoot: true alongside fsGroup: 999 to pass Trivy
-      # KSV-0012 while granting PVC write access to MySQL user 999
       securityContext:
         runAsNonRoot: true
         runAsUser: 999
@@ -186,8 +179,6 @@ spec:
       containers:
         - name: django-mysql-db
           image: mysql:8.0
-          # No imagePullPolicy override — defaults to IfNotPresent, correct
-          # for a fixed, versioned upstream tag.
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -222,8 +213,6 @@ spec:
               memory: 1Gi
           livenessProbe:
             exec:
-              # Invoked sh -c to expand $MYSQL_ROOT_PASSWORD properly during
-              # liveness checks
               command:
                 - sh
                 - -c
@@ -282,7 +271,6 @@ spec:
       containers:
         - name: django-redis
           image: redis:7.2-alpine
-          # No imagePullPolicy override — same reasoning as db.
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

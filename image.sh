@@ -26,28 +26,8 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
   CMD nc -z 0 8000 || exit 1
 
-CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+CMD ["uvicorn", "app.asgi:application", "--host", "0.0.0.0", "--port", "8000"]
 
-# requirements.txt
-Django==5.2.16
-mysqlclient==2.2.4
-djangorestframework==3.15.2
-redis==8.0.1
-
-# requirements.lock
-# Core Framework & System dependencies
-asgiref==3.8.1
-sqlparse==0.5.3
-Django==5.2.16
-
-# Database & Engine drivers
-mysqlclient==2.2.4
-
-# API Engine & Helpers
-djangorestframework==3.15.2
-
-# Cache & Redis protocols
-redis==8.0.1
 
 #-# #-# #-#
 
@@ -111,34 +91,3 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
   CMD nc -z 0 8000 || exit 1
 
 CMD ["uvicorn", "app.asgi:application", "--host", "0.0.0.0", "--port", "8000"]
-
-# requirements.txt
-Django==5.2.16
-mysqlclient==2.2.4
-djangorestframework==3.15.2
-redis==8.0.1
-uvicorn[standard]==0.34.0
-
-# requirements.lock
-# Core Framework & Transitive Dependencies
-asgiref==3.8.1
-sqlparse==0.5.3
-typing-extensions==4.12.2
-Django==5.2.16
-
-# Database & Engine Drivers
-mysqlclient==2.2.4
-
-# API Engine & Helpers
-djangorestframework==3.15.2
-
-# Cache, Redis & Async Protocols
-redis==8.0.1
-
-# Production ASGI Server & Async Extensions
-h11==0.14.0
-httptools==0.6.4
-uvloop==0.21.0
-watchfiles==1.0.4
-websockets==14.1
-uvicorn==0.34.0

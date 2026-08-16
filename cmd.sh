@@ -10,6 +10,7 @@ docker compose build --no-cache
 docker compose up -d
 
 # Execute framework migrations and verify directory state
+docker compose exec app python manage.py makemigrations
 docker compose exec app python manage.py migrate --no-input
 docker compose exec app ls -la /usr/src/app
 

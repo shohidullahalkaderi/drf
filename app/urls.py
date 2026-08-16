@@ -27,5 +27,6 @@ def api_status(request):
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('', api_status),
-    path('api/', include('app.authentication.urls')), 
+    path('api/', include('app.authentication.urls')),
+    path('api/', include('chat.urls')), 
 ]
