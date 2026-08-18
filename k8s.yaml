@@ -6,6 +6,8 @@ metadata:
     app.kubernetes.io/name: django-app
 type: Opaque
 stringData:
+  # [SECURITY]: Core application secret key and service credentials secured via Kubernetes Secret.
+  SECRET_KEY: "django-insecure-thy^kqi^5f*lpv9)#6+ogi@b27egi4f(q3m-x=@qikk^2%!guj"
   DB_PASSWORD: "django_password"
   MYSQL_ROOT_PASSWORD: "root_password"
   REDIS_PASSWORD: "secure_password"
@@ -82,13 +84,25 @@ spec:
         runAsUser: 10001
         runAsGroup: 10001
         fsGroup: 10001
+        # [SECURITY HARDENING]: Enforce RuntimeDefault seccomp profile to restrict kernel syscalls and prevent privilege escalation / kernel exploits.
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: django-app
           image: django-app:dev
+          # MODIFIED: Always -> IfNotPresent. Reverted for local kind/Docker
+          # Desktop dev: this image is built locally and never pushed to a
+          # registry, so imagePullPolicy: Always caused ErrImagePull/
+          # ImagePullBackOff (kubelet tried to pull "django-app:dev" from
+          # Docker Hub, which doesn't have it). IfNotPresent is correct here
+          # since the cluster uses the image already loaded into its local
+          # store. Switch to Always + an immutable tag (e.g. git SHA) pushed
+          # to a real registry once this moves to an actual prod cluster.
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: false
+            # [SECURITY HARDENING]: Make root filesystem read-only to prevent 0-day RCE payloads from writing or modifying code/binaries.
+            readOnlyRootFilesystem: true
             capabilities:
               drop:
                 - ALL
@@ -96,6 +110,14 @@ spec:
             - containerPort: 8000
               protocol: TCP
           env:
+            # [PYTHON OPTIMIZATION/COMPATIBILITY]: Prevent Python from trying to write .pyc bytecode files to the read-only root filesystem.
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            # [PYTHON OPTIMIZATION]: Ensure logs stream instantly to container stdout without buffering.
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: LOG_CHANNEL
+              value: "stderr"
             - name: DB_HOST
               value: "db"
             - name: DB_NAME
@@ -118,6 +140,15 @@ spec:
                 secretKeyRef:
                   name: django-secrets
                   key: REDIS_PASSWORD
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: django-secrets
+                  key: SECRET_KEY
+          volumeMounts:
+            # [SECURITY HARDENING]: Writable ephemeral storage required for runtime temp files when root filesystem is read-only.
+            - mountPath: /tmp
+              name: app-tmp
           resources:
             requests:
               cpu: 100m
@@ -150,22 +181,26 @@ spec:
             # [30-second SSE streaming setup]: A threshold of 4 means Kubelet waits 4 consecutive failures 
             # (15s * 4 = 60 seconds of unresponsiveness) before killing the pod.
             failureThreshold: 4
-          restartPolicy: Always
+      restartPolicy: Always
+      volumes:
+        # [SECURITY HARDENING]: Ephemeral emptyDir volume for writable /tmp directory.
+        - name: app-tmp
+          emptyDir: {}
 
 ---
+# [STATEFULSET MIGRATION]: Converted MySQL deployment to a StatefulSet for stable identities and unique per-pod storage.
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: db
   labels:
     io.kompose.service: db
 spec:
+  serviceName: "db"
   replicas: 1
   selector:
     matchLabels:
       io.kompose.service: db
-  strategy:
-    type: Recreate
   template:
     metadata:
       labels:
@@ -176,11 +211,16 @@ spec:
         runAsUser: 999
         runAsGroup: 999
         fsGroup: 999
+        # [SECURITY HARDENING]: Enforce RuntimeDefault seccomp profile to block unauthorized kernel system calls.
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: django-mysql-db
           image: mysql:8.0
           securityContext:
             allowPrivilegeEscalation: false
+            # [SECURITY HARDENING]: Make root filesystem read-only to satisfy KSV-0014 and lock down binaries.
+            readOnlyRootFilesystem: true
             capabilities:
               drop:
                 - ALL
@@ -222,42 +262,46 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 5
           volumeMounts:
+            # [PERSISTENCE]: Mount persistent volume for MySQL data files to ensure data safety across restarts.
             - mountPath: /var/lib/mysql
               name: django-db-data
+            # [SECURITY HARDENING]: Ephemeral writable volume required for MySQL runtime sockets when root filesystem is read-only.
+            - mountPath: /var/run/mysqld
+              name: mysql-run
+            # [SECURITY HARDENING]: Ephemeral writable volume required for MySQL temp files when root filesystem is read-only.
+            - mountPath: /tmp
+              name: mysql-tmp
       restartPolicy: Always
       volumes:
-        - name: django-db-data
-          persistentVolumeClaim:
-            claimName: django-db-data
+        - name: mysql-run
+          emptyDir: {}
+        - name: mysql-tmp
+          emptyDir: {}
+  # [STATEFULSET MIGRATION]: Replaced standalone PVC with volumeClaimTemplates so each replica gets an isolated disk.
+  volumeClaimTemplates:
+    - metadata:
+        name: django-db-data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 1Gi
 
 ---
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: django-db-data
-  labels:
-    io.kompose.service: django-db-data
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 1Gi
-
----
+# [STATEFULSET MIGRATION]: Converted Redis deployment to a StatefulSet.
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: redis
   labels:
     io.kompose.service: redis
 spec:
+  serviceName: "redis"
   replicas: 1
   selector:
     matchLabels:
       io.kompose.service: redis
-  strategy:
-    type: Recreate
   template:
     metadata:
       labels:
@@ -268,11 +312,16 @@ spec:
         runAsUser: 999
         runAsGroup: 999
         fsGroup: 999
+        # [SECURITY HARDENING]: Enforce RuntimeDefault seccomp profile to lock down Redis container system calls.
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: django-redis
           image: redis:7.2-alpine
           securityContext:
             allowPrivilegeEscalation: false
+            # [SECURITY HARDENING]: Make root filesystem read-only to satisfy KSV-0014 and lock down binaries.
+            readOnlyRootFilesystem: true
             capabilities:
               drop:
                 - ALL
@@ -307,24 +356,23 @@ spec:
             timeoutSeconds: 3
             failureThreshold: 5
           volumeMounts:
+            # [PERSISTENCE]: Mount persistent volume for Redis data storage.
             - mountPath: /data
               name: redis-data
+            # [SECURITY HARDENING]: Ephemeral writable volume required for Redis temporary runtime files when root filesystem is read-only.
+            - mountPath: /tmp
+              name: redis-tmp
       restartPolicy: Always
       volumes:
-        - name: redis-data
-          persistentVolumeClaim:
-            claimName: redis-data
-
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: redis-data
-  labels:
-    io.kompose.service: redis-data
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 500Mi
+        - name: redis-tmp
+          emptyDir: {}
+  # [STATEFULSET MIGRATION]: Dynamic volume template for Redis.
+  volumeClaimTemplates:
+    - metadata:
+        name: redis-data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 500Mi
