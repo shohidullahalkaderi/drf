@@ -3,11 +3,14 @@ import asyncio
 import time
 import redis.asyncio as aioredis
 from asgiref.sync import sync_to_async
+
 from django.conf import settings
 from django.http import StreamingHttpResponse, JsonResponse
 from django.views import View
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
+
+from rest_framework import status
 from rest_framework.authtoken.models import Token
 
 from .models import Message
@@ -20,6 +23,7 @@ async_redis_client = aioredis.Redis(
     password=settings.REDIS_PASSWORD,
     decode_responses=True
 )
+
 
 async def verify_bearer_token(request):
     """
@@ -52,7 +56,10 @@ class SendMessageView(View):
     async def post(self, request):
         user = await verify_bearer_token(request)
         if not user:
-            return JsonResponse({"detail": "Invalid auth token provided."}, status=401)
+            return JsonResponse(
+                {"detail": "Invalid auth token provided."}, 
+                status=status.HTTP_401_UNAUTHORIZED
+            )
 
         try:
             data = json.loads(request.body)
@@ -64,26 +71,36 @@ class SendMessageView(View):
             
             is_valid = await sync_to_async(serializer.is_valid)()
             if not is_valid:
-                return JsonResponse(serializer.errors, status=400)
+                return JsonResponse(
+                    {"detail": "Invalid message provided."}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
             message_instance = await sync_to_async(serializer.save)()
-            payload = MessageSerializer(message_instance).data
+            
+            # Safe async evaluation of serializer data
+            payload = await sync_to_async(lambda: MessageSerializer(message_instance).data)()
             json_payload = json.dumps(payload)
             
-            # Publish live event to Redis channel & cache pointers asynchronously
+            # Publish live event to Redis channel & cache global pointers asynchronously
             await async_redis_client.publish('chat-channel', json_payload)
             await async_redis_client.setex('latest_chat_id', 3600, message_instance.id)
             await async_redis_client.setex('latest_chat_message', 3600, json_payload)
             
             return JsonResponse({
-                "status": "success",
-                "data": payload
-            }, status=201)
+                "detail": payload
+            }, status=status.HTTP_201_CREATED)
             
         except json.JSONDecodeError:
-            return JsonResponse({"error": "Invalid JSON payload"}, status=400)
+            return JsonResponse(
+                {"detail": "Invalid JSON payload"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
         except Exception as e:
-            return JsonResponse({"error": str(e)}, status=500)
+            return JsonResponse(
+                {"detail": str(e)}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 @method_decorator(csrf_exempt, name='dispatch')
@@ -91,21 +108,28 @@ class ChatStreamView(View):
     """
     Production-Ready SSE Stream View for Kubernetes Environments (No Nginx):
     - 30-second maximum connection lifetime recycling window
-    - MySQL offline catch-up backfilling for missed messages (defaults to 0 if after_id omitted)
+    - Server-side stateful delta querying with strict 0-fallback for seeded history
     - True Redis Pub/Sub live event streaming (without heartbeat pings)
     """
     async def get(self, request):
         user = await verify_bearer_token(request)
         if not user:
-            return JsonResponse({"detail": "Invalid auth token provided."}, status=401)
+            return JsonResponse(
+                {"detail": "Invalid auth token provided."}, 
+                status=status.HTTP_401_UNAUTHORIZED
+            )
 
-        after_id_param = request.GET.get('after_id', None)
+        # Retrieve the user's last seen message ID from Redis session state
+        redis_cursor_key = f"user_last_seen:{user.id}"
+        last_seen_id_str = await async_redis_client.get(redis_cursor_key)
         
-        try:
-            last_sent_id = int(after_id_param) if after_id_param is not None else 0
-        except ValueError:
+        if last_seen_id_str is not None:
+            last_sent_id = int(last_seen_id_str)
+        else:
+            # Fallback to 0 on first connection to guarantee seeded DB backfill
             last_sent_id = 0
 
+        # Server-Side Delta Query: Fetch only messages strictly greater than the user's last seen ID
         missed_messages = []
         try:
             new_messages = await sync_to_async(list)(
@@ -114,6 +138,9 @@ class ChatStreamView(View):
             if new_messages:
                 serializer = MessageSerializer(new_messages, many=True)
                 missed_messages = serializer.data
+                # Update the cursor to the latest fetched message ID
+                last_sent_id = new_messages[-1].id
+                await async_redis_client.set(redis_cursor_key, last_sent_id)
         except Exception:
             pass
 
@@ -126,12 +153,12 @@ class ChatStreamView(View):
 
             try:
                 # Connection success handshake
-                yield f"data: {json.dumps({'message': 'Connected to SSE stream successfully'})}\n\n"
+                yield f"data: {json.dumps({'detail': 'Connected to SSE stream successfully'})}\n\n"
 
-                # Deliver any offline missed/seeded messages from MySQL first
+                # Deliver server-side delta-queried missed messages first
                 for msg in missed_messages:
                     yield f"data: {json.dumps(msg)}\n\n"
-                
+                    
                 while True:
                     if (time.time() - start_time) > max_duration:
                         break
@@ -145,7 +172,15 @@ class ChatStreamView(View):
 
                         if message and message.get('type') == 'message':
                             chat_data = message['data']
+                            parsed_msg = json.loads(chat_data)
+                            msg_id = parsed_msg.get('id')
+                            
+                            # Stream live message to client
                             yield f"data: {chat_data}\n\n"
+                            
+                            # Automatically advance user's cursor state in Redis on live delivery
+                            if msg_id:
+                                await async_redis_client.set(redis_cursor_key, msg_id)
 
                     except asyncio.TimeoutError:
                         # Timeout loops back to check max_duration cleanly
@@ -154,7 +189,7 @@ class ChatStreamView(View):
             except asyncio.CancelledError:
                 pass
             except Exception as e:
-                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                yield f"data: {json.dumps({'detail': str(e)})}\n\n"
             finally:
                 await pubsub.unsubscribe('chat-channel')
                 await pubsub.close()
@@ -169,29 +204,45 @@ class ChatStreamView(View):
 class FetchMessagesView(View):
     """
     Fallback historical fetch endpoint backed by MySQL and secured with Bearer token validation.
-    Defaults to ID 0 if after_id is omitted to ensure seeded messages are returned.
+    Handles server-side delta fetching using user session tracking in Redis if after_id is omitted.
     """
     async def get(self, request):
         user = await verify_bearer_token(request)
         if not user:
-            return JsonResponse({"detail": "Invalid auth token provided."}, status=401)
+            return JsonResponse(
+                {"detail": "Invalid auth token provided."}, 
+                status=status.HTTP_401_UNAUTHORIZED
+            )
 
         after_id_param = request.GET.get('after_id', None)
 
         if after_id_param is None:
-            after_id = 0
+            redis_cursor_key = f"user_last_seen:{user.id}"
+            last_seen_id_str = await async_redis_client.get(redis_cursor_key)
+            after_id = int(last_seen_id_str) if last_seen_id_str is not None else 0
         else:
             try:
                 after_id = int(after_id_param)
             except ValueError:
                 after_id = 0
 
-        new_messages = await sync_to_async(list)(
-            Message.objects.filter(id__gt=after_id).order_by('id')
-        )
-        serializer = MessageSerializer(new_messages, many=True)
+        try:
+            new_messages = await sync_to_async(list)(
+                Message.objects.filter(id__gt=after_id).order_by('id')
+            )
+            
+            if new_messages:
+                # Update user cursor state
+                await async_redis_client.set(f"user_last_seen:{user.id}", new_messages[-1].id)
 
-        return JsonResponse({
-            "status": "success",
-            "data": serializer.data
-        }, status=200)
+            serializer = MessageSerializer(new_messages, many=True)
+
+            return JsonResponse({
+                "detail": serializer.data
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return JsonResponse(
+                {"detail": str(e)}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

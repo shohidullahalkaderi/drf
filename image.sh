@@ -28,7 +28,6 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
 
 CMD ["uvicorn", "app.asgi:application", "--host", "0.0.0.0", "--port", "8000"]
 
-
 #-# #-# #-#
 
 # production-image
@@ -39,9 +38,9 @@ WORKDIR /usr/src/app
 
 # Install build dependencies & header libraries for compilation
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        gcc \
-        default-libmysqlclient-dev \
-        pkg-config \
+    gcc \
+    default-libmysqlclient-dev \
+    pkg-config \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir --upgrade pip
 
@@ -56,6 +55,12 @@ RUN mkdir /wheels && \
         pip wheel --no-cache-dir --wheel-dir=/wheels -r requirements.txt; \
     fi
 
+# Copy application code into builder
+COPY . .
+
+# Pre-create staticfiles and media directories in builder stage
+RUN mkdir -p staticfiles media
+
 
 # Stage : Production Runtime
 FROM python:3.11-slim AS runner
@@ -64,21 +69,23 @@ WORKDIR /usr/src/app
 
 # Install runtime database shared libraries (not -dev headers) + netcat
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libmariadb3 \
-        netcat-openbsd \
+    libmariadb3 \
+    netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
+
+# Create UID/GID 10001 non-root user pattern
+RUN addgroup --gid 10001 appgroup \
+    && adduser --uid 10001 --ingroup appgroup --disabled-password --no-create-home appuser
 
 # Copy pre-compiled wheels from builder stage and install offline
 COPY --from=builder /wheels /wheels
 RUN pip install --no-cache-dir --no-index --find-links=/wheels /wheels/*.whl \
     && rm -rf /wheels
 
-# NEW: create UID/GID 10001 — switched to the addgroup/adduser pattern.
-RUN addgroup --gid 10001 appgroup \
-    && adduser --uid 10001 --ingroup appgroup --disabled-password --no-create-home appuser
+# Copy application code, pre-created folders, and assign ownership in one go
+COPY --from=builder --chown=10001:10001 /usr/src/app .
 
-COPY --chown=10001:10001 . .
-
+# Switch to non-root security context
 USER 10001
 
 EXPOSE 8000
@@ -88,6 +95,6 @@ EXPOSE 8000
 # 8000) are what actually govern pod health in the cluster. Kept only
 # for standalone `docker run` debugging; harmless, not a production risk.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-  CMD nc -z 0 8000 || exit 1
+    CMD nc -z 0 8000 || exit 1
 
 CMD ["uvicorn", "app.asgi:application", "--host", "0.0.0.0", "--port", "8000"]

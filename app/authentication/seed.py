@@ -60,11 +60,11 @@ if admin_user:
     ]
 
     for message_data in messages:
-        # Use update_or_create or get_or_create to prevent duplication on re-runs
-        Message.objects.update_or_create(
+        # Always create a new database record on every seed execution
+        Message.objects.create(
             sender_id=message_data['sender_id'],
-            message=message_data['message'],
-            defaults={'auth_id': message_data['auth_id']}
+            auth_id=message_data['auth_id'],
+            message=message_data['message']
         )
 
 print("Database seeding completed successfully!")

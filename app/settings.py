@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 import os
+import sys
 from pathlib import Path
 from django.core.exceptions import ImproperlyConfigured
 
@@ -145,8 +146,32 @@ USE_TZ = True
 
 
 # Static files (CSS, JavaScript, Images)
+# STATIC & MEDIA FILES CONFIGURATION (ADDED)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+# Absolute path to directory where collectstatic gathers static files for deployment
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+# URL that handles the media files served from MEDIA_ROOT
+MEDIA_URL = '/media/'
+# Absolute path to the directory where user-uploaded files will be saved
+MEDIA_ROOT = BASE_DIR / 'media'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# Direct logs to stdout so Kubernetes container log aggregation captures them properly
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'stream': sys.stdout,
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO',
+    },
+}
