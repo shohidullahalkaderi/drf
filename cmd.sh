@@ -3,6 +3,7 @@ set -e
 
 # Clean up build cache and reset stack environment
 # docker builder prune -f
+# docker system prune -a --volumes -f
 docker compose down -v --remove-orphans
 
 # Rebuild microservice layers from scratch and boot
@@ -17,3 +18,9 @@ docker compose exec app ls -la /usr/src/app
 # Seed the database and run test suite
 docker compose exec app python manage.py seed
 docker compose exec app python manage.py test --settings=app.settings_test
+
+# re-create collect static files during container build
+docker compose exec app python manage.py collectstatic --no-input
+
+# test media files inside shell
+# docker compose exec app python manage.py shell

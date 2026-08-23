@@ -58,8 +58,11 @@ RUN mkdir /wheels && \
 # Copy application code into builder
 COPY . .
 
-# Pre-create staticfiles and media directories in builder stage
-RUN mkdir -p staticfiles media
+# Install pre-compiled wheels in builder stage so Django is available for collectstatic execution
+RUN pip install --no-cache-dir --no-index --find-links=/wheels /wheels/*.whl
+
+# Pre-create staticfiles and media directories, then run collectstatic in a single command
+RUN mkdir -p staticfiles media && python manage.py collectstatic --no-input
 
 
 # Stage : Production Runtime

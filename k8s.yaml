@@ -13,6 +13,21 @@ stringData:
   REDIS_PASSWORD: "secure_password"
 
 ---
+# [PERSISTENCE]: Standalone Persistent Volume Claim for media uploads, ensuring user files survive pod restarts.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: django-media-pvc
+  labels:
+    io.kompose.service: app
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+
+---
 apiVersion: v1
 kind: Service
 metadata:
@@ -149,11 +164,12 @@ spec:
             # [SECURITY HARDENING]: Writable ephemeral storage required for runtime temp files when root filesystem is read-only.
             - mountPath: /tmp
               name: app-tmp
-            # [ADDED - STATIC & MEDIA]: Writable volume mounts for STATIC_ROOT and MEDIA_ROOT matching settings.py and Dockerfile paths.
-            - mountPath: /usr/src/app/staticfiles
-              name: app-staticfiles
+            # [REMOVED STATICFILES MOUNT]: Static files are already baked into the image layers during docker build 
+            # via `collectstatic`. A read-only root filesystem can read image layers directly, and removing this 
+            # avoids masking the built-in assets with an empty volume.
+            # [PERSISTENCE]: Persistent volume mount for media uploads so they survive pod restarts.
             - mountPath: /usr/src/app/media
-              name: app-media
+              name: django-media
           resources:
             requests:
               cpu: 100m
@@ -191,11 +207,10 @@ spec:
         # [SECURITY HARDENING]: Ephemeral emptyDir volume for writable /tmp directory.
         - name: app-tmp
           emptyDir: {}
-        # [ADDED - STATIC & MEDIA]: Ephemeral emptyDir volumes to satisfy readOnlyRootFilesystem for staticfiles and media paths.
-        - name: app-staticfiles
-          emptyDir: {}
-        - name: app-media
-          emptyDir: {}
+        # [PERSISTENCE]: Persistent Volume Claim backing user media uploads.
+        - name: django-media
+          persistentVolumeClaim:
+            claimName: django-media-pvc
 
 ---
 # [STATEFULSET MIGRATION]: Converted MySQL deployment to a StatefulSet for stable identities and unique per-pod storage.
