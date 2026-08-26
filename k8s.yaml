@@ -116,7 +116,7 @@ spec:
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
-            # [SECURITY HARDENING]: Make root filesystem read-only to prevent 0-day RCE payloads from writing or modifying code/binaries.
+            # [SECURITY HARDENING]: Make root filesystem read-only to prevent 0-day RCE payloads from writing or modifying code/binaries and Prevents malware from writing scripts or modifying system binaries on disk.
             readOnlyRootFilesystem: true
             capabilities:
               drop:
@@ -244,7 +244,7 @@ spec:
           image: mysql:8.0
           securityContext:
             allowPrivilegeEscalation: false
-            # [SECURITY HARDENING]: Make root filesystem read-only to satisfy KSV-0014 and lock down binaries.
+            # [SECURITY HARDENING]: Make root filesystem read-only to satisfy KSV-0014 and lock down binaries and prevent malware from writing scripts or modifying system binaries on disk.
             readOnlyRootFilesystem: true
             capabilities:
               drop:
@@ -345,7 +345,7 @@ spec:
           image: redis:7.2-alpine
           securityContext:
             allowPrivilegeEscalation: false
-            # [SECURITY HARDENING]: Make root filesystem read-only to satisfy KSV-0014 and lock down binaries.
+            # [SECURITY HARDENING]: Make root filesystem read-only to satisfy KSV-0014 and lock down binaries and prevent malware from writing scripts or modifying system binaries on disk.
             readOnlyRootFilesystem: true
             capabilities:
               drop:
@@ -401,3 +401,101 @@ spec:
         resources:
           requests:
             storage: 500Mi
+
+---
+# [SECURITY HARDENING / KIND NETWORK POLICY]: NetworkPolicy for Django App.
+# Optimized for local kind clusters: allows open port 8000 ingress for easy debugging/port-forwarding 
+# without requiring an external Nginx controller, while strictly restricting outbound traffic to 
+# MySQL, Redis, and CoreDNS in the kube-system namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: app-network-policy
+  labels:
+    app.kubernetes.io/name: django-app
+spec:
+  podSelector:
+    matchLabels:
+      io.kompose.service: app
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              io.kompose.service: db
+      ports:
+        - protocol: TCP
+          port: 3306
+    - to:
+        - podSelector:
+            matchLabels:
+              io.kompose.service: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+---
+# [SECURITY HARDENING / NETWORK POLICY]: NetworkPolicy for Database - 
+# Strictly isolated to accept inbound traffic ONLY from the Django app pod.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-network-policy
+  labels:
+    io.kompose.service: db
+spec:
+  podSelector:
+    matchLabels:
+      io.kompose.service: db
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              io.kompose.service: app
+      ports:
+        - protocol: TCP
+          port: 3306
+
+---
+# [SECURITY HARDENING / NETWORK POLICY]: NetworkPolicy for Redis - 
+# Strictly isolated to accept inbound traffic ONLY from the Django app pod.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-network-policy
+  labels:
+    io.kompose.service: redis
+spec:
+  podSelector:
+    matchLabels:
+      io.kompose.service: redis
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              io.kompose.service: app
+      ports:
+        - protocol: TCP
+          port: 6379
