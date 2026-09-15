@@ -25,6 +25,39 @@ async_redis_client = aioredis.Redis(
 )
 
 
+async def safe_update_cursor(redis_client, cursor_key, new_id):
+    """
+    Ensures the Redis user cursor only moves forward and never regresses 
+    due to concurrent request race conditions.
+    """
+    lua_script = """
+        local current = redis.call('get', KEYS[1])
+        if current == false or tonumber(ARGV[1]) > tonumber(current) then
+            redis.call('set', KEYS[1], ARGV[1])
+            return 1
+        end
+        return 0
+    """
+    await redis_client.eval(lua_script, 1, cursor_key, new_id)
+
+
+async def safe_update_latest_chat(redis_client, chat_id, json_payload):
+    """
+    Ensures global cache pointers only move forward and never regress 
+    due to concurrent request race conditions.
+    """
+    lua_script = """
+        local current = redis.call('get', KEYS[1])
+        if current == false or tonumber(ARGV[1]) > tonumber(current) then
+            redis.call('setex', KEYS[1], 3600, ARGV[1])
+            redis.call('setex', KEYS[2], 3600, ARGV[2])
+            return 1
+        end
+        return 0
+    """
+    await redis_client.eval(lua_script, 2, 'latest_chat_id', 'latest_chat_message', chat_id, json_payload)
+
+
 async def verify_bearer_token(request):
     """
     Asynchronous helper to validate Bearer token authentication 
@@ -51,7 +84,7 @@ async def verify_bearer_token(request):
 class SendMessageView(View):
     """
     Asynchronous View handling Bearer token verification, MySQL persistence, 
-    and Redis Pub/Sub broadcasting.
+    and Redis broadcasting matching Laravel's exact structure.
     """
     async def post(self, request):
         user = await verify_bearer_token(request)
@@ -82,10 +115,11 @@ class SendMessageView(View):
             payload = await sync_to_async(lambda: MessageSerializer(message_instance).data)()
             json_payload = json.dumps(payload)
             
-            # Publish live event to Redis channel & cache global pointers asynchronously
+            # 1. Real-Time Broadcasting: Publish live event to Redis channel
             await async_redis_client.publish('chat-channel', json_payload)
-            await async_redis_client.setex('latest_chat_id', 3600, message_instance.id)
-            await async_redis_client.setex('latest_chat_message', 3600, json_payload)
+
+            # 2. Store latest global pointers atomically using Lua script to prevent race conditions
+            await safe_update_latest_chat(async_redis_client, message_instance.id, json_payload)
             
             return JsonResponse({
                 "detail": payload
@@ -106,10 +140,10 @@ class SendMessageView(View):
 @method_decorator(csrf_exempt, name='dispatch')
 class ChatStreamView(View):
     """
-    Production-Ready SSE Stream View for Kubernetes Environments (No Nginx):
+    Production-Ready SSE Stream View matching Laravel's Polling/Gap-Backfill Architecture:
     - 30-second maximum connection lifetime recycling window
-    - Server-side stateful delta querying with strict 0-fallback for seeded history
-    - True Redis Pub/Sub live event streaming (without heartbeat pings)
+    - Server-side stateful delta tracking per user with strict 0-fallback for seeded history
+    - Polling loop with incremental database backfilling for multi-message gaps
     """
     async def get(self, request):
         user = await verify_bearer_token(request)
@@ -119,14 +153,14 @@ class ChatStreamView(View):
                 status=status.HTTP_401_UNAUTHORIZED
             )
 
-        # Retrieve the user's last seen message ID from Redis session state
-        redis_cursor_key = f"user_last_seen:{user.id}"
+        redis_cursor_key = f"chat:user_last_seen:{user.id}"
         last_seen_id_str = await async_redis_client.get(redis_cursor_key)
-        
+
         if last_seen_id_str is not None:
             last_sent_id = int(last_seen_id_str)
         else:
-            # Fallback to 0 on first connection to guarantee seeded DB backfill
+            # Force fallback to 0 on first connection.
+            # Guarantees seeded database messages are backfilled even if Redis keys reset.
             last_sent_id = 0
 
         # Server-Side Delta Query: Fetch only messages strictly greater than the user's last seen ID
@@ -138,61 +172,54 @@ class ChatStreamView(View):
             if new_messages:
                 serializer = MessageSerializer(new_messages, many=True)
                 missed_messages = serializer.data
-                # Update the cursor to the latest fetched message ID
                 last_sent_id = new_messages[-1].id
-                await async_redis_client.set(redis_cursor_key, last_sent_id)
+                
+                # Update user cursor state in Redis atomically
+                await safe_update_cursor(async_redis_client, redis_cursor_key, last_sent_id)
         except Exception:
             pass
 
         async def event_stream():
+            nonlocal last_sent_id
             start_time = time.time()
             max_duration = 30  # 30-second connection lifetime recycling window
 
-            pubsub = async_redis_client.pubsub()
-            await pubsub.subscribe('chat-channel')
+            # Connection success handshake
+            yield f"data: {json.dumps({'detail': 'Connected to SSE stream successfully'})}\n\n"
+
+            # Deliver server-side delta-queried missed messages first
+            for msg in missed_messages:
+                yield f"data: {json.dumps(msg)}\n\n"
 
             try:
-                # Connection success handshake
-                yield f"data: {json.dumps({'detail': 'Connected to SSE stream successfully'})}\n\n"
-
-                # Deliver server-side delta-queried missed messages first
-                for msg in missed_messages:
-                    yield f"data: {json.dumps(msg)}\n\n"
-                    
                 while True:
                     if (time.time() - start_time) > max_duration:
-                        break
+                        break  # Gracefully close connection after 30 seconds for worker recycling
 
-                    try:
-                        # Non-blocking get_message with short timeout
-                        message = await pubsub.get_message(
-                            ignore_subscribe_messages=True, 
-                            timeout=1.0
+                    latest_id = await async_redis_client.get('latest_chat_id')
+
+                    # If a new message ID exists beyond what we've processed, backfill and stream them
+                    if latest_id and int(latest_id) > last_sent_id:
+                        intervening_messages = await sync_to_async(list)(
+                            Message.objects.filter(id__gt=last_sent_id, id__lte=int(latest_id)).order_by('id')
                         )
 
-                        if message and message.get('type') == 'message':
-                            chat_data = message['data']
-                            parsed_msg = json.loads(chat_data)
-                            msg_id = parsed_msg.get('id')
-                            
-                            # Stream live message to client
-                            yield f"data: {chat_data}\n\n"
-                            
-                            # Automatically advance user's cursor state in Redis on live delivery
-                            if msg_id:
-                                await async_redis_client.set(redis_cursor_key, msg_id)
+                        if intervening_messages:
+                            for msg in intervening_messages:
+                                payload = await sync_to_async(lambda: MessageSerializer(msg).data)()
+                                yield f"data: {json.dumps(payload)}\n\n"
 
-                    except asyncio.TimeoutError:
-                        # Timeout loops back to check max_duration cleanly
-                        pass
+                            last_sent_id = int(latest_id)
+                            
+                            # Automatically advance user's cursor state in Redis atomically
+                            await safe_update_cursor(async_redis_client, redis_cursor_key, last_sent_id)
+
+                    await asyncio.sleep(0.5)  # 0.5s pause to maintain non-blocking execution efficiency
 
             except asyncio.CancelledError:
                 pass
             except Exception as e:
                 yield f"data: {json.dumps({'detail': str(e)})}\n\n"
-            finally:
-                await pubsub.unsubscribe('chat-channel')
-                await pubsub.close()
 
         response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
         response['Cache-Control'] = 'no-cache'
@@ -203,8 +230,8 @@ class ChatStreamView(View):
 @method_decorator(csrf_exempt, name='dispatch')
 class FetchMessagesView(View):
     """
-    Fallback historical fetch endpoint backed by MySQL and secured with Bearer token validation.
-    Handles server-side delta fetching using user session tracking in Redis if after_id is omitted.
+    Fallback historical fetch endpoint backed directly by MySQL.
+    Uses server-side Redis session tracking if after_id is omitted.
     """
     async def get(self, request):
         user = await verify_bearer_token(request)
@@ -215,9 +242,9 @@ class FetchMessagesView(View):
             )
 
         after_id_param = request.GET.get('after_id', None)
+        redis_cursor_key = f"chat:user_last_seen:{user.id}"
 
         if after_id_param is None:
-            redis_cursor_key = f"user_last_seen:{user.id}"
             last_seen_id_str = await async_redis_client.get(redis_cursor_key)
             after_id = int(last_seen_id_str) if last_seen_id_str is not None else 0
         else:
@@ -227,15 +254,16 @@ class FetchMessagesView(View):
                 after_id = 0
 
         try:
-            new_messages = await sync_to_async(list)(
+            messages = await sync_to_async(list)(
                 Message.objects.filter(id__gt=after_id).order_by('id')
             )
-            
-            if new_messages:
-                # Update user cursor state
-                await async_redis_client.set(f"user_last_seen:{user.id}", new_messages[-1].id)
 
-            serializer = MessageSerializer(new_messages, many=True)
+            if messages:
+                max_id = messages[-1].id
+                # Safely update user cursor state atomically using Lua script
+                await safe_update_cursor(async_redis_client, redis_cursor_key, max_id)
+
+            serializer = MessageSerializer(messages, many=True)
 
             return JsonResponse({
                 "detail": serializer.data

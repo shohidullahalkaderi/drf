@@ -1,4 +1,4 @@
-from django.db import transaction
+from django.db import transaction, IntegrityError
 from django.contrib.auth import get_user_model
 from rest_framework import status, permissions, exceptions
 from rest_framework.views import APIView
@@ -45,9 +45,15 @@ class RegisterView(BaseThrottledView):
         serializer = RegisterSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
             
-        with transaction.atomic():
-            user = serializer.save()
-            token, _ = Token.objects.get_or_create(user=user)
+        try:
+            with transaction.atomic():
+                user = serializer.save()
+                token, _ = Token.objects.get_or_create(user=user)
+        except IntegrityError:
+            # Catches concurrent database unique constraint violations (TOCTOU)
+            raise exceptions.ValidationError({
+                "detail": "A user with this username or email already exists."
+            })
             
         return Response({
             "user": UserSerializer(user).data,
